@@ -3,6 +3,7 @@
 XCB_Display :: struct {
     #as base: Base_Display;
 
+    xlib_dpy: *X11.Display;
     handle: *xcb_connection_t;
     screen: *xcb_screen_t;
     xi_ext_opcode: u8;
@@ -44,9 +45,29 @@ xcb_init_display :: (display: *Display) -> bool {
     if !load_procs(*xcb_xkb,   "libxcb-xkb.so",    "xcb_xkb_",   *xcb_xkb_loaded)    return false;
     if !xkbcommon_load(init_xcb_compat=true) return false;
 
-    connection := xcb.connect(null, null);
+    dpy: *X11.Display;
+    connection: *xcb_connection_t;
+
+    if display.base.init_flags & .Pure_XCB {
+        log("XCB: initializing with pure xcb connection");
+        connection = xcb.connect(null, null);
+    } else {
+        log("XCB: initializing with Xlib connection");
+
+        if !xlib_load(*X11, init_xcb_compat=true) return false;
+
+        dpy = X11.XOpenDisplay(null);
+        if !dpy {
+            log_error("Failed to connect to X server");
+            return false;
+        }
+
+        X11.XSetEventQueueOwner(dpy, .XCB);
+
+        connection = X11.XGetXCBConnection(dpy);
+    }
     if !connection {
-        log_error("Failed to connect to X server");
+        log_error("Cannot get xcb connection to X server");
         return false;
     }
 
@@ -69,7 +90,7 @@ xcb_init_display :: (display: *Display) -> bool {
         log_error("Failed to set up XKB extension");
         return false;
     }
-    log("xcb-xkb version %.%", xkb_ver_major, xkb_ver_minor);
+    log("XCB: xcb-xkb version %.%", xkb_ver_major, xkb_ver_minor);
 
     affect := xcb_xkb_event_type_t.NEW_KEYBOARD_NOTIFY | .MAP_NOTIFY | .STATE_NOTIFY;
     map_parts := xcb_xkb_map_part_t.KEY_TYPES | .KEY_SYMS | .MODIFIER_MAP | .EXPLICIT_COMPONENTS | .KEY_ACTIONS | .VIRTUAL_MODS | .VIRTUAL_MOD_MAP;
@@ -117,6 +138,7 @@ xcb_init_display :: (display: *Display) -> bool {
     }
 
     xd: *XCB_Display = display;
+    xd.xlib_dpy        = dpy;
     xd.handle          = connection;
     xd.screen          = xcb.setup_roots_iterator(xcb.get_setup(connection)).data;
     xd.xi_ext_opcode   = xi_ext.major_opcode;
@@ -306,57 +328,7 @@ xcb_update_window_events :: (display: *Display) {
 
             case XCB_GE_GENERIC;
                 geev := cast(*xcb_ge_generic_event_t) event;
-                if geev.extension != xd.xi_ext_opcode continue;
-                if geev.event_type == {
-                    case XCB_INPUT_KEY_PRESS; #through;
-                    case XCB_INPUT_KEY_RELEASE;
-                        kpev := cast(*xcb_input_key_press_event_t) event;
-
-                        utf32: u32;
-                        is_printable: bool;
-                        keycode: xkb_keycode_t = kpev.detail;
-                        keysym := xkb_state_key_get_one_sym(xd.kb_state, keycode);
-
-                        ji_event: Input.Event;
-                        ji_event.type = .KEYBOARD;
-                        ji_event.shift_pressed    = xkb_state_mod_index_is_active(xd.kb_state, xd.mod_idx_shift, .XKB_STATE_MODS_EFFECTIVE) == 1;
-                        ji_event.ctrl_pressed     = xkb_state_mod_index_is_active(xd.kb_state, xd.mod_idx_ctrl,  .XKB_STATE_MODS_EFFECTIVE) == 1;
-                        ji_event.alt_pressed      = xkb_state_mod_index_is_active(xd.kb_state, xd.mod_idx_alt,   .XKB_STATE_MODS_EFFECTIVE) == 1;
-                        ji_event.cmd_meta_pressed = xkb_state_mod_index_is_active(xd.kb_state, xd.mod_idx_super, .XKB_STATE_MODS_EFFECTIVE) == 1;
-
-                        if geev.event_type == XCB_INPUT_KEY_PRESS {
-                            xkb_compose_state_feed(xd.kb_compose_state, keysym);
-
-                            status := xkb_compose_state_get_status(xd.kb_compose_state);
-                            if status == .XKB_COMPOSE_COMPOSED || status == .XKB_COMPOSE_CANCELLED {
-                                keysym = xkb_compose_state_get_one_sym(xd.kb_compose_state);
-                                xkb_compose_state_reset(xd.kb_compose_state);
-                            }
-
-                            utf32 = xkb_keysym_to_utf32(keysym);
-                            is_printable = ((utf32 >= 32) && (utf32 != 127));
-
-                            ji_event.key_pressed = 1;
-                            ji_event.key_code = x11_translate_key_code(keysym);
-                            ji_event.text_input_count = xx is_printable;
-                            xd.base.input_button_states[ji_event.key_code] = (Input.Key_Current_State.START | Input.Key_Current_State.DOWN);
-                        } else {
-                            ji_event.key_pressed = 0;
-                            ji_event.key_code = x11_translate_key_code(keysym);
-                            xd.base.input_button_states[ji_event.key_code] = Input.Key_Current_State.END;
-                        }
-
-                        array_add(*xd.base.events_this_frame, ji_event);
-
-                        if ji_event.key_pressed && is_printable {
-                            text_event: Input.Event;
-                            text_event.type = .TEXT_INPUT;
-                            text_event.key_pressed = 1;
-                            text_event.key_code = ji_event.key_code;
-                            text_event.utf32 = utf32;
-                            array_add(*xd.base.events_this_frame, text_event);
-                        }
-                }
+                if geev.extension == xd.xi_ext_opcode  handle_xinput_event(xd, geev);
 
             case;
                 log(">> unhandled event: % %", event.response_type & ~0x80, event.*);
@@ -561,6 +533,60 @@ reinit_xkb_state :: (d: *XCB_Display) -> bool {
     d.core_kb_id = core_kb_id;
 
     return true;
+}
+
+handle_xinput_event :: (xd: *XCB_Display, geev: *xcb_ge_generic_event_t) {
+    if geev.event_type == {
+        case XCB_INPUT_KEY_PRESS; #through;
+        case XCB_INPUT_KEY_RELEASE; {
+            kpev := cast(*xcb_input_key_press_event_t) geev;
+
+            utf32: u32;
+            is_printable: bool;
+            keycode: xkb_keycode_t = kpev.detail;
+            keysym := xkb_state_key_get_one_sym(xd.kb_state, keycode);
+
+            ji_event: Input.Event;
+            ji_event.type = .KEYBOARD;
+            ji_event.shift_pressed    = xkb_state_mod_index_is_active(xd.kb_state, xd.mod_idx_shift, .XKB_STATE_MODS_EFFECTIVE) == 1;
+            ji_event.ctrl_pressed     = xkb_state_mod_index_is_active(xd.kb_state, xd.mod_idx_ctrl,  .XKB_STATE_MODS_EFFECTIVE) == 1;
+            ji_event.alt_pressed      = xkb_state_mod_index_is_active(xd.kb_state, xd.mod_idx_alt,   .XKB_STATE_MODS_EFFECTIVE) == 1;
+            ji_event.cmd_meta_pressed = xkb_state_mod_index_is_active(xd.kb_state, xd.mod_idx_super, .XKB_STATE_MODS_EFFECTIVE) == 1;
+
+            if geev.event_type == XCB_INPUT_KEY_PRESS {
+                xkb_compose_state_feed(xd.kb_compose_state, keysym);
+
+                status := xkb_compose_state_get_status(xd.kb_compose_state);
+                if status == .XKB_COMPOSE_COMPOSED || status == .XKB_COMPOSE_CANCELLED {
+                    keysym = xkb_compose_state_get_one_sym(xd.kb_compose_state);
+                    xkb_compose_state_reset(xd.kb_compose_state);
+                }
+
+                utf32 = xkb_keysym_to_utf32(keysym);
+                is_printable = ((utf32 >= 32) && (utf32 != 127));
+
+                ji_event.key_pressed = 1;
+                ji_event.key_code = x11_translate_key_code(keysym);
+                ji_event.text_input_count = xx is_printable;
+                xd.base.input_button_states[ji_event.key_code] = (Input.Key_Current_State.START | Input.Key_Current_State.DOWN);
+            } else {
+                ji_event.key_pressed = 0;
+                ji_event.key_code = x11_translate_key_code(keysym);
+                xd.base.input_button_states[ji_event.key_code] = Input.Key_Current_State.END;
+            }
+
+            array_add(*xd.base.events_this_frame, ji_event);
+
+            if ji_event.key_pressed && is_printable {
+                text_event: Input.Event;
+                text_event.type = .TEXT_INPUT;
+                text_event.key_pressed = 1;
+                text_event.key_code = ji_event.key_code;
+                text_event.utf32 = utf32;
+                array_add(*xd.base.events_this_frame, text_event);
+            }
+        }
+    }
 }
 
 #scope_module
