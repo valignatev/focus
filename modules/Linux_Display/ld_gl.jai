@@ -63,6 +63,7 @@ create_gl_context :: inline (display: *Display, major_version := 0, minor_versio
                 case .EGL; X11_EGL_Ops.create_context(display, major_version, minor_version, compatibility, debug);
             }
         }
+        case XCB_Display; XCB_EGL_Ops.create_context(display, major_version, minor_version, compatibility, debug);
         case Wayland_Display; Wayland_EGL_Ops.create_context(display, major_version, minor_version, compatibility, debug);
     }
 }
@@ -174,7 +175,7 @@ X11_EGL_Ops :: GL_Ops.{
         gl.type = .EGL;
         gl.egl.dpy, gl.egl.ctx, gl.egl.cnf = EGL.create_context(
             *EGL,
-            display.x11.handle,
+            display.x11.handle, 0, null,
             major_version, minor_version,
             compatibility, debug);
         gl.ops = X11_EGL_Ops;
@@ -223,6 +224,63 @@ X11_EGL_Ops :: GL_Ops.{
     }
 };
 
+XCB_EGL_Ops :: GL_Ops.{
+    create_context = (display: *Display, major_version := 0, minor_version := 0, compatibility := false, debug := false) {
+        xcb_check_usage(display);
+
+        if gl_initialized(display) return;
+        GL.wsi_load(*EGL);
+
+        attrs := s32.[EGL.PLATFORM_XCB_SCREEN_EXT, 0, EGL.NONE];
+
+        gl := *display.base.gl;
+        gl.type = .EGL;
+        gl.egl.dpy, gl.egl.ctx, gl.egl.cnf = EGL.create_context(
+            *EGL,
+            display.xcb.handle, EGL.PLATFORM_XCB_EXT, null, //attrs.data,
+            major_version, minor_version,
+            compatibility, debug);
+        gl.ops = XCB_EGL_Ops;
+        gl.ops.get_proc_address = EGL.GetProcAddress;
+
+        win := create_dummy_window_xcb(*display.xcb);
+        egs := EGL.CreateWindowSurface(gl.egl.dpy, gl.egl.cnf, xx win, null);
+        EGL.MakeCurrent(gl.egl.dpy, egs, egs, gl.egl.ctx);
+        GL.gl_load(*GL.gl_procs, EGL.GetProcAddress);
+        EGL.MakeCurrent(gl.egl.dpy, EGL.NO_SURFACE, EGL.NO_SURFACE, EGL.NO_CONTEXT);
+        EGL.DestroySurface(gl.egl.dpy, egs);
+        xcb.destroy_window(display.xcb.handle, win);
+    },
+
+    create_surface = (window: *Window) {
+        xcb_check_usage(null, window);
+
+        dgl := *window.base.display.base.gl;
+        wgl := *window.base.gl;
+
+        wgl.type = .EGL;
+        wgl.egl.native = xx window.xcb.handle;
+        wgl.egl.surface = EGL.CreateWindowSurface(dgl.egl.dpy, dgl.egl.cnf, wgl.egl.native, null);
+        assert(wgl.egl.surface != null);
+    },
+
+    make_current = (window: *Window) {
+        xcb_check_usage(null, window);
+
+        wgl := *window.base.gl.egl;
+        dgl := *window.base.display.base.gl.egl;
+        EGL.MakeCurrent(dgl.dpy, wgl.surface, wgl.surface, dgl.ctx);
+    },
+
+    swap_buffers = (window: *Window) {
+        xcb_check_usage(null, window);
+
+        wgl := *window.base.gl.egl;
+        dgl := *window.base.display.base.gl.egl;
+        EGL.SwapBuffers(dgl.dpy, wgl.surface);
+    }
+};
+
 Wayland_EGL_Ops :: GL_Ops.{
     create_context = (display: *Display, major_version := 0, minor_version := 0, compatibility := false, debug := false) {
         wl_check_usage(display);
@@ -237,7 +295,7 @@ Wayland_EGL_Ops :: GL_Ops.{
         gl.type = .EGL;
         gl.egl.dpy, gl.egl.ctx, gl.egl.cnf = EGL.create_context(
             *EGL,
-            display.wld.handle,
+            display.wld.handle, 0, null,
             major_version, minor_version,
             compatibility, debug);
         gl.ops = Wayland_EGL_Ops;
@@ -299,4 +357,21 @@ create_dummy_x11_window :: (x11_display: *X11_Display) -> X11.Window {
         cast(u64) (X11.CWColormap | X11.CWEventMask),
         *swa);
     return win;
+}
+
+create_dummy_window_xcb :: (xd: *XCB_Display) -> u32 {
+    wid := xcb.generate_id(xd.handle);
+    xcb.create_window(
+        c=xd.handle,
+        depth=XCB_COPY_FROM_PARENT,
+        wid=wid,
+        parent=xd.screen.root,
+        x=0, y=0, width=100, height=100, border_width=1,
+        _class=.XCB_WINDOW_CLASS_INPUT_OUTPUT,
+        visual=xd.screen.root_visual,
+        value_mask=.XCB_CW_BACK_PIXEL | .XCB_CW_EVENT_MASK,
+        value_list=u32.[xd.screen.white_pixel, xx (xcb_event_mask_t.EXPOSURE | xcb_event_mask_t.STRUCTURE_NOTIFY)].data,
+    );
+    xcb.flush(xd.handle);
+    return wid;
 }
