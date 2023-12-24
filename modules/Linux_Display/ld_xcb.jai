@@ -381,7 +381,34 @@ xcb_set_icon_from_raw_data :: (window: *Window, data: *u8, width: u32, height: u
 }
 
 xcb_toggle_fullscreen :: (window: *Window, desire_fullscreen: bool, saved: *Saved_Window_Info) -> success: bool, width: s32, height: s32 {
-    return true, 100, 100;
+    xcb_check_usage(null, window);
+    xw : *XCB_Window = window;
+    xd := xw.display;
+
+    event: xcb_client_message_event_t;
+    if desire_fullscreen {
+        event.response_type = XCB_CLIENT_MESSAGE;
+        event.format = 32;
+        event.type = xd.global_atoms._NET_WM_STATE;
+        event.window = xw.handle;
+        event.data.data32[0] = _NET_WM_STATE_ADD;
+        event.data.data32[1] = xd.global_atoms._NET_WM_STATE_FULLSCREEN;
+    } else {
+        event.response_type = XCB_CLIENT_MESSAGE;
+        event.format = 32;
+        event.type = xd.global_atoms._NET_WM_STATE;
+        event.window = xw.handle;
+        event.data.data32[0] = _NET_WM_STATE_REMOVE;
+        event.data.data32[1] = xd.global_atoms._NET_WM_STATE_FULLSCREEN;
+    }
+    xcb.send_event(
+        xd.handle, 0, xd.screen.root,
+        xx (xcb_event_mask_t.SUBSTRUCTURE_NOTIFY | .SUBSTRUCTURE_REDIRECT),
+        xx *event);
+    xcb.flush(xd.handle);
+
+    _, _, w, h, ok := xcb_get_dimensions(window, false);
+    return ok, w, h;
 }
 
 xcb_has_native_handle :: (window: *Window, native_handle: *void) -> bool {
@@ -450,6 +477,10 @@ xcb_get_dpi_scaling_factor :: (window: *Window) -> float {
 #load "xcb_xinput_fp.jai";
 #load "xcb_xkb_fp.jai";
 #load "xcb_cursor_fp.jai";
+
+_NET_WM_STATE_REMOVE :: 0;
+_NET_WM_STATE_ADD    :: 1;
+_NET_WM_STATE_TOGGLE :: 2;
 
 /* we need this to free some stuff that the xcb libraries return */
 libc :: #system_library "libc";
