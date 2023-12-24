@@ -10,6 +10,8 @@ XCB_Display :: struct {
     xkb_event_base: u8;
     file_descriptor: s32;
 
+    cursors: Table(string, xcb_cursor_t);
+
     kb_context: *xkb_context;
     kb_keymap : *xkb_keymap;
     kb_state  : *xkb_state;
@@ -29,6 +31,10 @@ XCB_Display :: struct {
         WM_NAME: xcb_atom_t;
 
         _NET_WM_ICON: xcb_atom_t;
+        _NET_WM_STATE: xcb_atom_t;
+        _NET_WM_STATE_FULLSCREEN: xcb_atom_t;
+
+        UTF8_STRING: xcb_atom_t;
     }
 }
 
@@ -40,9 +46,10 @@ XCB_Window :: struct {
 }
 
 xcb_init_display :: (display: *Display) -> bool {
-    if !load_procs(*xcb,       "libxcb.so",        "xcb_",       *xcb_loaded)        return false;
-    if !load_procs(*xcb_input, "libxcb-xinput.so", "xcb_input_", *xcb_xinput_loaded) return false;
-    if !load_procs(*xcb_xkb,   "libxcb-xkb.so",    "xcb_xkb_",   *xcb_xkb_loaded)    return false;
+    if !load_procs(*xcb,        "libxcb.so",        "xcb_",        *xcb_loaded)        return false;
+    if !load_procs(*xcb_input,  "libxcb-xinput.so", "xcb_input_",  *xcb_xinput_loaded) return false;
+    if !load_procs(*xcb_xkb,    "libxcb-xkb.so",    "xcb_xkb_",    *xcb_xkb_loaded)    return false;
+    if !load_procs(*xcb_cursor, "libxcb-cursor.so", "xcb_cursor_", *xcb_cursor_loaded) return false;
     if !xkbcommon_load(init_xcb_compat=true) return false;
 
     dpy: *X11.Display;
@@ -158,6 +165,7 @@ xcb_init_display :: (display: *Display) -> bool {
     bd.get_mouse_pointer_position = xcb_get_mouse_pointer_position;
 
     if !reinit_xkb_state(xd) return false;
+    if !load_cursors(xd) return false;
 
     create_gl_context(display);
 
@@ -215,6 +223,8 @@ xcb_create_window :: (display: *Display, window: *Window, width: int, height: in
     bw.maximize_window            = xcb_maximize_window;
     bw.set_cursor_from_theme      = xcb_set_cursor_from_theme;
     bw.get_dpi_scaling_factor     = xcb_get_dpi_scaling_factor;
+
+    set_utf8_property(xw, xx xcb_atom_enum_t.WM_NAME, window_name);
 
     create_gl_surface(window);
 
@@ -353,35 +363,15 @@ xcb_set_icon_from_raw_data :: (window: *Window, data: *u8, width: u32, height: u
     xw: *XCB_Window = window;
     xd: *XCB_Display = xw.display;
 
-    // push_allocator(temp);
-    // cardinal_data : [..]u64;  // CARDINAL is defined as `long` even though it works with 32bit values...
-    // array_resize(*cardinal_data, 2 + width * height, initialize=false);
-    // cardinal_data[0] = width;
-    // cardinal_data[1] = height;
-    // pixels := cast(*u32)data;
-    // for 0..width * height - 1 {
-    //     cardinal_data[2 + it] = pixels[it];
-    // }
-
-    // xcb.change_property_checked(
-    //     xd.handle,
-    //     xx xcb_prop_mode_t.REPLACE,
-    //     xw.handle,
-    //     xd.global_atoms._NET_WM_ICON,
-    //     xx xcb_atom_enum_t.CARDINAL,
-    //     32, xx cardinal_data.count, cardinal_data.data);
-
-    log("set_icon(%x%)", width, height);
-
     size_data := u32.[width, height];
-    xcb.change_property_checked(
+    xcb.change_property(
         xd.handle,
         xx xcb_prop_mode_t.REPLACE,
         xw.handle,
         xd.global_atoms._NET_WM_ICON,
         xx xcb_atom_enum_t.CARDINAL,
         32, xx size_data.count, size_data.data);
-    xcb.change_property_checked(
+    xcb.change_property(
         xd.handle,
         xx xcb_prop_mode_t.APPEND,
         xw.handle,
@@ -416,7 +406,13 @@ xcb_get_render_dimensions :: (window: *Window) -> s32, s32 {
 
 xcb_get_mouse_pointer_position :: (window: *Window, right_handed: bool) -> x: int, y: int, success: bool {
     xcb_check_usage(null, window);
-    return 0, 0, true;
+    xw : *XCB_Window = window;
+    xd := xw.display;
+
+    cookie := xcb.query_pointer(xd.handle, xw.handle);
+    reply  := xcb.query_pointer_reply(xd.handle, cookie, null);
+
+    return reply.win_x, reply.win_y, true;
 }
 
 xcb_enable_dnd :: (window: *Window, typelist: []string) {
@@ -425,6 +421,7 @@ xcb_enable_dnd :: (window: *Window, typelist: []string) {
 
 xcb_set_window_title :: (window: *Window, title: string) {
     xcb_check_usage(null, window);
+    set_utf8_property(window, xx xcb_atom_enum_t.WM_NAME, title);
 }
 
 xcb_maximize_window :: (window: *Window) {
@@ -433,6 +430,14 @@ xcb_maximize_window :: (window: *Window) {
 
 xcb_set_cursor_from_theme :: (window: *Window, name: string) {
     xcb_check_usage(null, window);
+    xw : *XCB_Window = window;
+    xd := xw.display;
+    cursor, found := table_find(*xd.cursors, name);
+    if found {
+        attrs: xcb_change_window_attributes_value_list_t;
+        attrs.cursor = cursor;
+        xcb.change_window_attributes_aux(xd.handle, xw.handle, xx xcb_cw_t.CURSOR, *attrs);
+    }
 }
 
 xcb_get_dpi_scaling_factor :: (window: *Window) -> float {
@@ -444,6 +449,7 @@ xcb_get_dpi_scaling_factor :: (window: *Window) -> float {
 #load "xcb_fp.jai";
 #load "xcb_xinput_fp.jai";
 #load "xcb_xkb_fp.jai";
+#load "xcb_cursor_fp.jai";
 
 /* we need this to free some stuff that the xcb libraries return */
 libc :: #system_library "libc";
@@ -454,6 +460,7 @@ generic_c_call :: #type () #c_call;
 xcb_loaded := false;
 xcb_xinput_loaded := false;
 xcb_xkb_loaded := false;
+xcb_cursor_loaded := false;
 
 load_procs :: (procs: *$T, libname: string, prefix: $string, loaded: *bool) -> success := false {
     if loaded.* return true;
@@ -589,7 +596,40 @@ handle_xinput_event :: (xd: *XCB_Display, geev: *xcb_ge_generic_event_t) {
     }
 }
 
+set_utf8_property :: (xw: *XCB_Window, property: xcb_atom_t, value: string) {
+    xd := xw.display;
+    sz_val := tprint("%\0", value);
+    xcb.change_property(
+        xd.handle,
+        xx xcb_prop_mode_t.REPLACE,
+        xw.handle,
+        xx property,
+        xx xd.global_atoms.UTF8_STRING,
+        8, xx sz_val.count, sz_val.data);
+}
+
+load_cursors :: (xd: *XCB_Display) -> bool {
+    ctx: *xcb_cursor_context_t;
+    if xcb_cursor.context_new(xd.handle, xd.screen, *ctx) < 0 return false;
+    defer xcb_cursor.context_free(ctx);
+
+    preloaded_x_cursors :: string.[
+        "default", "pointer", "not-allowed", "col-resize", "row-resize",
+        "all-scroll", "nw-resize", "se-resize", "text",
+    ];
+
+    deinit(*xd.cursors);
+    table_reset(*xd.cursors);
+    for preloaded_x_cursors {
+        name := temp_c_string(it);
+        table_add(*xd.cursors, it, xcb_cursor.load_cursor(ctx, name));
+    }
+
+    return true;
+}
+
 #scope_module
 xcb: XCB_Symbols;
 xcb_input: XCB_XInput_Symbols;
 xcb_xkb: XCB_XKB_Symbols;
+xcb_cursor: XCB_Cursor_Symbols;

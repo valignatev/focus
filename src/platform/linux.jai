@@ -127,7 +127,7 @@ platform_create_window :: () {
         background_color_rgb = color_as_3_floats(Color.BACKGROUND_0),
     );
 
-    if LD.active_backend() == .X11 {
+    if LD.active_backend() != .WAYLAND {
         data := icon_data.png_data;
 
         width: s32;
