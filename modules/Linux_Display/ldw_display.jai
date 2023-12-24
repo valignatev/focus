@@ -107,7 +107,7 @@ Wayland_Window :: struct {
 }
 
 wl_init_display :: (display: *Display) -> bool {
-    if !xkb_load(*libxkb_procs) return false;
+    if !xkbcommon_load() return false;
     if !wl_global_init() return false;
 
     d: *Wayland_Display = display;

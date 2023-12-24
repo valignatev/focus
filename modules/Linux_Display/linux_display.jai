@@ -3,15 +3,15 @@ Saved_Window_Info :: struct {}
 Display :: union {
     #as base: Base_Display;
     #as x11: X11_Display;
+    #as xcb: XCB_Display;
     #as wld: Wayland_Display;
-    /* TODO: add `xcb` here */
 }
 
 Window :: union {
     #as base: Base_Window;
     #as x11: X11_Window;
+    #as xcb: XCB_Window;
     #as wld: Wayland_Window;
-    /* TODO: add `xcb` here */
 }
 
 INVALID_WINDOW : *Window : null;
@@ -22,12 +22,14 @@ BACKEND_CHOICE :: enum {
     PREFER_X11;
     FORCE_WAYLAND;
     FORCE_X11;
+    FORCE_XCB;
 }
 
 ACTIVE_BACKEND :: enum {
     UNINITIALIZED;
     WAYLAND;
     X11;
+    XCB;
 }
 
 
@@ -74,6 +76,7 @@ init_display :: (display: *Display, desired_backend := BACKEND_CHOICE.PREFER_BES
         }
         case .FORCE_WAYLAND; return wl_init_display(display);
         case .FORCE_X11; return x11_init_display(display);
+        case .FORCE_XCB; return xcb_init_display(display);
     }
 
     return false;
@@ -84,6 +87,7 @@ active_backend :: (display: *Display) -> ACTIVE_BACKEND {
     if bd.type == {
         case Wayland_Display; return .WAYLAND;
         case X11_Display; return .X11;
+        case XCB_Display; return .XCB;
         case; return .UNINITIALIZED;
     }
 }
@@ -284,6 +288,7 @@ Input :: #import "Input";
 
 #load "missing.jai";
 #load "fontconfig.jai";
+#load "ld_xcb.jai";
 #load "ldx_display.jai";
 #load "ldx_input.jai";
 #load "ldw_display.jai";
@@ -356,7 +361,7 @@ Base_Window :: struct {
 
 #if VALIDATE_USAGE {
     check_usage :: ($type: Type = Base_Display, display: *Display, windows: ..*Window, loc := #caller_location) #expand #no_debug {
-        #assert(type == Wayland_Display || type == X11_Display);
+        #assert(type == Wayland_Display || type == X11_Display || type == XCB_Display);
 
         bd: *Base_Display = display;
 
@@ -364,6 +369,7 @@ Base_Window :: struct {
         if type == {
             case Wayland_Display; window_type = Wayland_Window;
             case X11_Display;     window_type = X11_Window;
+            case XCB_Display;     window_type = XCB_Window;
         }
 
         if bd then assert(bd.type == type, "Expected display type %, got % (%)", type, bd.type, bd, loc=loc);
@@ -391,6 +397,7 @@ Base_Window :: struct {
 
 wl_check_usage :: #bake_arguments check_usage(type=Wayland_Display);
 x11_check_usage :: #bake_arguments check_usage(type=X11_Display);
+xcb_check_usage :: #bake_arguments check_usage(type=XCB_Display);
 
 WHEEL_DELTA : s32 : 120;
 
