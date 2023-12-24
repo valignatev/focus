@@ -66,8 +66,8 @@ create_gl_context :: inline (display: *Display, major_version := 0, minor_versio
         case XCB_Display; {
             if display.base.desired_gl_backend == {
                 case .AUTOSELECT; #through;
-                case .EGL; XCB_EGL_Ops.create_context(display, major_version, minor_version, compatibility, debug);
                 case .GLX; XCB_GLX_Ops.create_context(display, major_version, minor_version, compatibility, debug);
+                case .EGL; XCB_EGL_Ops.create_context(display, major_version, minor_version, compatibility, debug);
             }
         }
         case Wayland_Display; Wayland_EGL_Ops.create_context(display, major_version, minor_version, compatibility, debug);
