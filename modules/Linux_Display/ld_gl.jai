@@ -63,7 +63,13 @@ create_gl_context :: inline (display: *Display, major_version := 0, minor_versio
                 case .EGL; X11_EGL_Ops.create_context(display, major_version, minor_version, compatibility, debug);
             }
         }
-        case XCB_Display; XCB_EGL_Ops.create_context(display, major_version, minor_version, compatibility, debug);
+        case XCB_Display; {
+            if display.base.desired_gl_backend == {
+                case .AUTOSELECT; #through;
+                case .EGL; XCB_EGL_Ops.create_context(display, major_version, minor_version, compatibility, debug);
+                case .GLX; XCB_GLX_Ops.create_context(display, major_version, minor_version, compatibility, debug);
+            }
+        }
         case Wayland_Display; Wayland_EGL_Ops.create_context(display, major_version, minor_version, compatibility, debug);
     }
 }
@@ -224,6 +230,65 @@ X11_EGL_Ops :: GL_Ops.{
     }
 };
 
+XCB_GLX_Ops :: GL_Ops.{
+    create_context = (display: *Display, major_version := 0, minor_version := 0, compatibility := false, debug := false) {
+        xcb_check_usage(display);
+
+        if gl_initialized(display) return;
+        GL.wsi_load(*GLX);
+
+        gl := *display.base.gl;
+        gl.type = .GLX;
+        gl.ops = XCB_GLX_Ops;
+        gl.ops.get_proc_address = GLX.GetProcAddress;
+
+        dpy := display.xcb.xlib_dpy;
+        assert(dpy != null);
+
+        gl.glx.ctx, gl.glx.cnf = GLX.create_context(
+            *GLX,
+            dpy, X11.DefaultScreen(dpy),
+            xx major_version, xx minor_version,
+            compatibility, debug);
+        log("GLX: ctx=% cnf=%", gl.glx.ctx, gl.glx.cnf);
+        win := create_dummy_window_xcb(*display.xcb);
+        glx_win := GLX.CreateWindow(dpy, gl.glx.cnf, win, null);
+        GLX.MakeContextCurrent(dpy, glx_win, glx_win, gl.glx.ctx);
+        GL.gl_load(*GL.gl_procs, GLX.GetProcAddress);
+        GLX.MakeContextCurrent(dpy, 0, 0, null);
+        GLX.DestroyWindow(dpy, glx_win);
+        xcb.destroy_window(display.xcb.handle, win);
+    },
+
+    create_surface = (window: *Window) {
+        xcb_check_usage(null, window);
+
+        dpy     := window.xcb.display.xlib_dpy;
+        glx_cnf := window.base.display.base.gl.glx.cnf;
+
+        gl := *window.base.gl;
+        gl.type = .GLX;
+        gl.glx.win = GLX.CreateWindow(dpy, glx_cnf, window.xcb.handle, null);
+    },
+
+    make_current = (window: *Window) {
+        xcb_check_usage(null, window);
+
+        dpy     := window.xcb.display.xlib_dpy;
+        glx_win := window.base.gl.glx.win;
+        glx_ctx := window.xcb.display.base.gl.glx.ctx;
+        GLX.MakeCurrent(dpy, glx_win, glx_ctx);
+    },
+
+    swap_buffers = (window: *Window) {
+        xcb_check_usage(null, window);
+
+        dpy     := window.xcb.display.xlib_dpy;
+        glx_win := window.base.gl.glx.win;
+        GLX.SwapBuffers(dpy, glx_win);
+    }
+};
+
 XCB_EGL_Ops :: GL_Ops.{
     create_context = (display: *Display, major_version := 0, minor_version := 0, compatibility := false, debug := false) {
         xcb_check_usage(display);
@@ -231,15 +296,25 @@ XCB_EGL_Ops :: GL_Ops.{
         if gl_initialized(display) return;
         GL.wsi_load(*EGL);
 
-        attrs := s32.[EGL.PLATFORM_XCB_SCREEN_EXT, 0, EGL.NONE];
-
         gl := *display.base.gl;
         gl.type = .EGL;
-        gl.egl.dpy, gl.egl.ctx, gl.egl.cnf = EGL.create_context(
-            *EGL,
-            display.xcb.handle, EGL.PLATFORM_XCB_EXT, null, //attrs.data,
-            major_version, minor_version,
-            compatibility, debug);
+        if display.base.init_flags & .Pure_XCB {
+            log("EGL: initializing from xcb connection");
+            attrs := s32.[EGL.PLATFORM_XCB_SCREEN_EXT, 0, EGL.NONE];
+            gl.egl.dpy, gl.egl.ctx, gl.egl.cnf = EGL.create_context(
+                *EGL,
+                display.xcb.handle, EGL.PLATFORM_XCB_EXT, null,
+                major_version, minor_version,
+                compatibility, debug);
+        } else {
+            log("EGL: initializing from Xlib display");
+            assert(display.xcb.xlib_dpy != null);
+            gl.egl.dpy, gl.egl.ctx, gl.egl.cnf = EGL.create_context(
+                *EGL,
+                display.xcb.xlib_dpy, 0, null,
+                major_version, minor_version,
+                compatibility, debug);
+        }
         gl.ops = XCB_EGL_Ops;
         gl.ops.get_proc_address = EGL.GetProcAddress;
 

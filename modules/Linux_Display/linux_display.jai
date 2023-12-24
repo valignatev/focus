@@ -1,5 +1,9 @@
 Saved_Window_Info :: struct {}
 
+Init_Flags :: enum_flags {
+    Pure_XCB;
+}
+
 Display :: union {
     #as base: Base_Display;
     #as x11: X11_Display;
@@ -33,7 +37,7 @@ ACTIVE_BACKEND :: enum {
 }
 
 
-init_display :: (display: *Display, desired_backend := BACKEND_CHOICE.PREFER_BEST_USER_EXPERIENCE, desired_gl_backend := GL_BACKEND_CHOICE.AUTOSELECT, app_id := "com.jai.application") -> bool {
+init_display :: (display: *Display, desired_backend := BACKEND_CHOICE.PREFER_BEST_USER_EXPERIENCE, desired_gl_backend := GL_BACKEND_CHOICE.AUTOSELECT, flags: Init_Flags = 0, app_id := "com.jai.application") -> bool {
     timers_init();
 
     if display.base.type != Base_Display return true;
@@ -43,6 +47,7 @@ init_display :: (display: *Display, desired_backend := BACKEND_CHOICE.PREFER_BES
     bd: *Base_Display = display;
     if bd.app_id free(bd.app_id);
     bd.app_id = copy_string(app_id);
+    bd.init_flags = flags;
     bd.desired_gl_backend = desired_gl_backend;
     bd.loop_wakeup_event = eventfd(0, EFD_CLOEXEC);
 
@@ -302,6 +307,8 @@ GLX: GL.GLX_Lib;
 Base_Display :: struct {
     type: Type = Base_Display;
     app_id: string;
+
+    init_flags: Init_Flags;
 
     desired_gl_backend := GL_BACKEND_CHOICE.AUTOSELECT;
 
