@@ -62,7 +62,6 @@ DONE;
     }
 
     backend := LD.BACKEND_CHOICE.PREFER_BEST_USER_EXPERIENCE;
-    backend := LD.BACKEND_CHOICE.FORCE_XCB;
     cstr := getenv("FOCUS_LD_BACKEND");
     backend_s := ifx cstr then to_string(cstr) else "";
     if equal_nocase(backend_s, "prefer-wayland") then backend = .PREFER_WAYLAND;
