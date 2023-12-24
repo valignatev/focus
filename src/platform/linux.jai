@@ -62,12 +62,14 @@ DONE;
     }
 
     backend := LD.BACKEND_CHOICE.PREFER_BEST_USER_EXPERIENCE;
+    backend := LD.BACKEND_CHOICE.FORCE_XCB;
     cstr := getenv("FOCUS_LD_BACKEND");
     backend_s := ifx cstr then to_string(cstr) else "";
     if equal_nocase(backend_s, "prefer-wayland") then backend = .PREFER_WAYLAND;
     if equal_nocase(backend_s, "prefer-x11") then backend = .PREFER_X11;
     if equal_nocase(backend_s, "wayland") then backend = .FORCE_WAYLAND;
     if equal_nocase(backend_s, "x11") then backend = .FORCE_X11;
+    if equal_nocase(backend_s, "xcb") then backend = .FORCE_XCB;
 
     gl_backend := LD.GL_BACKEND_CHOICE.AUTOSELECT;
     cstr = getenv("FOCUS_LD_GL_BACKEND");
@@ -75,7 +77,16 @@ DONE;
     if equal_nocase(backend_s, "glx") then gl_backend = .GLX;
     if equal_nocase(backend_s, "egl") then gl_backend = .EGL;
 
-    LD.init_with_stdlib_interop(desired_backend=backend, desired_gl_backend=gl_backend, app_id=app_id);
+    flags : LD.Init_Flags = 0;
+    cstr = getenv("FOCUS_LD_FLAGS");
+    flags_s := ifx cstr then to_string(cstr) else "";
+    if equal_nocase(flags_s, "pure-xcb") then flags |= .Pure_XCB;  // @TODO actually parse the option string
+
+    LD.init_with_stdlib_interop(
+        desired_backend=backend,
+        desired_gl_backend=gl_backend,
+        flags=flags,
+        app_id=app_id);
 
     active_backend := LD.active_backend();
     assert(active_backend != .UNINITIALIZED);
@@ -372,7 +383,7 @@ platform_get_troubleshooting_info :: () -> string /* temp */ {
     print_to_builder(*sb, "\n");
 
     print_to_builder(*sb, "Interesting things in the environment:\n");
-    env_check(*sb, "FOCUS_LD_BACKEND", "FOCUS_LD_GL_BACKEND");
+    env_check(*sb, "FOCUS_LD_BACKEND", "FOCUS_LD_GL_BACKEND", "FOCUS_LD_FLAGS");
     env_check(*sb, "DISPLAY", "WAYLAND_DISPLAY");
     env_check(*sb, "DESKTOP_SESSION", "XDG_SESSION_DESKTOP", "XDG_CURRENT_DESKTOP");
     env_check(*sb, "XCURSOR_THEME", "XCURSOR_SIZE");
