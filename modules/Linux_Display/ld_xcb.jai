@@ -369,7 +369,13 @@ xcb_clipboard_get_text :: (display: *Display) -> string {
 }
 
 xcb_get_mouse_pointer_position :: (display: *Display, right_handed := false) -> x: int, y: int, success: bool {
-    return 0, 0, true;
+    xcb_check_usage(display, null);
+    xd: *XCB_Display = display;
+
+    cookie := xcb.query_pointer(xd.handle, xd.screen.root);
+    reply  := xcb.query_pointer_reply(xd.handle, cookie, null);
+
+    return reply.root_x, reply.root_y, true;
 }
 
 xcb_set_icon_from_raw_data :: (window: *Window, data: *u8, width: u32, height: u32) {
