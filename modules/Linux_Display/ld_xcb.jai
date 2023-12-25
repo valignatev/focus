@@ -239,7 +239,7 @@ xcb_create_window :: (display: *Display, window: *Window, width: int, height: in
     }
     mask.deviceid = xx xcb_input_device_t.ALL_MASTER;
     mask.mask_len = 1;
-    mask.data[0]  = .KEY_PRESS | .KEY_RELEASE;
+    mask.data[0]  = .KEY_PRESS | .KEY_RELEASE | .BUTTON_PRESS | .BUTTON_RELEASE;
     xcb_input.xi_select_events(xd.handle, wid, 1, *mask);
 
     xcb.map_window(xd.handle, wid);
@@ -629,6 +629,27 @@ handle_xinput_event :: (xd: *XCB_Display, geev: *xcb_ge_generic_event_t) {
                 array_add(*xd.base.events_this_frame, text_event);
             }
         }
+
+        case XCB_INPUT_BUTTON_PRESS; #through;
+        case XCB_INPUT_BUTTON_RELEASE;
+            bpev := cast(*xcb_input_device_button_press_event_t) geev;
+            if bpev.child > 3 || bpev.child < 1 return;
+
+            event: Input.Event;
+            event.type = .KEYBOARD;
+            event.key_pressed = xx (geev.event_type == XCB_INPUT_BUTTON_PRESS);
+            if bpev.child == {
+                case 1; event.key_code = Input.Key_Code.MOUSE_BUTTON_LEFT;
+                case 2; event.key_code = Input.Key_Code.MOUSE_BUTTON_MIDDLE;
+                case 3; event.key_code = Input.Key_Code.MOUSE_BUTTON_RIGHT;
+                case; assert(false);
+            }
+
+            xd.base.input_button_states[event.key_code] =
+                ifx event.key_pressed then (Input.Key_Current_State.START | Input.Key_Current_State.DOWN)
+                else Input.Key_Current_State.END;
+
+            array_add(*xd.base.events_this_frame, event);
     }
 }
 
