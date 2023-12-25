@@ -25,6 +25,9 @@ XCB_Display :: struct {
     mod_idx_alt_gr    : u32;
     core_kb_id        : s32;
 
+    fixed_scaling: bool;
+    dpi_override: float;
+
     global_atoms: struct {
         WM_PROTOCOLS: xcb_atom_t;
         WM_DELETE_WINDOW: xcb_atom_t;
@@ -32,6 +35,8 @@ XCB_Display :: struct {
 
         _NET_WM_ICON: xcb_atom_t;
         _NET_WM_STATE: xcb_atom_t;
+        _NET_WM_STATE_MAXIMIZED_VERT: xcb_atom_t;
+        _NET_WM_STATE_MAXIMIZED_HORZ: xcb_atom_t;
         _NET_WM_STATE_FULLSCREEN: xcb_atom_t;
 
         UTF8_STRING: xcb_atom_t;
@@ -244,6 +249,16 @@ xcb_create_window :: (display: *Display, window: *Window, width: int, height: in
 }
 
 xcb_set_fixed_scaling :: (display: *Display, factor: float) {
+    xcb_check_usage(display, null);
+
+    xd : *XCB_Display = display;
+
+    xd.fixed_scaling = (factor >= 0.1);
+    xd.dpi_override = factor * 96.0;
+    for * xd.base.windows {
+        _, _, w, h, _ := xcb_get_dimensions(it, false);
+        Input.add_resize_record(xx it, w, h);
+    }
 }
 
 xcb_wait_for_events :: (display: *Display) {
@@ -382,30 +397,9 @@ xcb_set_icon_from_raw_data :: (window: *Window, data: *u8, width: u32, height: u
 
 xcb_toggle_fullscreen :: (window: *Window, desire_fullscreen: bool, saved: *Saved_Window_Info) -> success: bool, width: s32, height: s32 {
     xcb_check_usage(null, window);
-    xw : *XCB_Window = window;
-    xd := xw.display;
 
-    event: xcb_client_message_event_t;
-    if desire_fullscreen {
-        event.response_type = XCB_CLIENT_MESSAGE;
-        event.format = 32;
-        event.type = xd.global_atoms._NET_WM_STATE;
-        event.window = xw.handle;
-        event.data.data32[0] = _NET_WM_STATE_ADD;
-        event.data.data32[1] = xd.global_atoms._NET_WM_STATE_FULLSCREEN;
-    } else {
-        event.response_type = XCB_CLIENT_MESSAGE;
-        event.format = 32;
-        event.type = xd.global_atoms._NET_WM_STATE;
-        event.window = xw.handle;
-        event.data.data32[0] = _NET_WM_STATE_REMOVE;
-        event.data.data32[1] = xd.global_atoms._NET_WM_STATE_FULLSCREEN;
-    }
-    xcb.send_event(
-        xd.handle, 0, xd.screen.root,
-        xx (xcb_event_mask_t.SUBSTRUCTURE_NOTIFY | .SUBSTRUCTURE_REDIRECT),
-        xx *event);
-    xcb.flush(xd.handle);
+    op : WM_State_Op = ifx desire_fullscreen then .ADD else .REMOVE;
+    set_wm_state(window, op, window.xcb.display.global_atoms._NET_WM_STATE_FULLSCREEN);
 
     _, _, w, h, ok := xcb_get_dimensions(window, false);
     return ok, w, h;
@@ -453,6 +447,9 @@ xcb_set_window_title :: (window: *Window, title: string) {
 
 xcb_maximize_window :: (window: *Window) {
     xcb_check_usage(null, window);
+    set_wm_state(window, .ADD,
+        window.xcb.display.global_atoms._NET_WM_STATE_MAXIMIZED_VERT,
+        window.xcb.display.global_atoms._NET_WM_STATE_MAXIMIZED_HORZ);
 }
 
 xcb_set_cursor_from_theme :: (window: *Window, name: string) {
@@ -469,7 +466,12 @@ xcb_set_cursor_from_theme :: (window: *Window, name: string) {
 
 xcb_get_dpi_scaling_factor :: (window: *Window) -> float {
     xcb_check_usage(null, window);
-    return 1.0;
+
+    xd := window.xcb.display;
+    if xd.fixed_scaling return xd.dpi_override / 96.0;
+
+    screen := xd.screen;
+    return (cast(float) screen.width_in_pixels / (cast(float) screen.width_in_millimeters / 25.4)) / 96.0;
 }
 
 #scope_file
@@ -478,9 +480,6 @@ xcb_get_dpi_scaling_factor :: (window: *Window) -> float {
 #load "xcb_xkb_fp.jai";
 #load "xcb_cursor_fp.jai";
 
-_NET_WM_STATE_REMOVE :: 0;
-_NET_WM_STATE_ADD    :: 1;
-_NET_WM_STATE_TOGGLE :: 2;
 
 /* we need this to free some stuff that the xcb libraries return */
 libc :: #system_library "libc";
@@ -637,6 +636,32 @@ set_utf8_property :: (xw: *XCB_Window, property: xcb_atom_t, value: string) {
         xx property,
         xx xd.global_atoms.UTF8_STRING,
         8, xx sz_val.count, sz_val.data);
+}
+
+WM_State_Op :: enum u32 {
+    REMOVE :: 0;
+    ADD    :: 1;
+    TOGGLE :: 2;
+}
+
+set_wm_state :: (xw: *XCB_Window, op: WM_State_Op, v1: xcb_atom_t, v2: xcb_atom_t = 0) {
+    xd := xw.display;
+
+    // https://specifications.freedesktop.org/wm-spec/latest/ar01s05.html
+    event: xcb_client_message_event_t;
+    event.response_type = XCB_CLIENT_MESSAGE;
+    event.format = 32;
+    event.type = xd.global_atoms._NET_WM_STATE;
+    event.window = xw.handle;
+    event.data.data32[0] = xx op;
+    event.data.data32[1] = v1;
+    event.data.data32[2] = v2;
+    event.data.data32[3] = 1;     // https://specifications.freedesktop.org/wm-spec/latest/ar01s09.html#sourceindication
+    xcb.send_event(
+        xd.handle, 0, xd.screen.root,
+        xx (xcb_event_mask_t.SUBSTRUCTURE_NOTIFY | .SUBSTRUCTURE_REDIRECT),
+        xx *event);
+    xcb.flush(xd.handle);
 }
 
 load_cursors :: (xd: *XCB_Display) -> bool {

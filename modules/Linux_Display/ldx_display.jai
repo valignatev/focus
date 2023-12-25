@@ -9,7 +9,7 @@ X11_Display :: struct {
     im: X11.XIM;
 
     fixed_scaling: bool;
-    dpi_override: s32;
+    dpi_override: float;
 
     global_atoms: X11.Global_Atoms;
 
@@ -569,7 +569,7 @@ x11_get_dpi_scaling_factor :: (window: *Window) -> float {
     x11_check_usage(null, window);
 
     w: *X11_Window = window;
-    if w.display.fixed_scaling return cast(float) w.display.dpi_override / 96.0;
+    if w.display.fixed_scaling return w.display.dpi_override / 96.0;
 
     screen := X11.XScreenOfDisplay(w.display.handle, 0);
     sw := X11.XWidthOfScreen(screen);
@@ -581,14 +581,10 @@ x11_set_fixed_scaling :: (display: *Display, factor: float) {
     x11_check_usage(display);
 
     d: *X11_Display = display;
-    fixed_scaling := (factor != 0.0);
-    new_dpi: s32 = xx (factor * 96.0);
-    if ((fixed_scaling != d.fixed_scaling) || (fixed_scaling && (new_dpi != d.dpi_override))) && (factor >= 0.0) {
-        d.fixed_scaling = fixed_scaling;
-        if fixed_scaling d.dpi_override = new_dpi;
-        for * d.base.windows {
-            x11_generate_resize(it);
-        }
+    d.fixed_scaling = (factor >= 0.1);
+    d.dpi_override = factor * 96.0;
+    for * d.base.windows {
+        x11_generate_resize(it);
     }
 }
 
