@@ -44,6 +44,8 @@ XCB_Display :: struct {
     atom_names: Table(xcb_atom_t, string);
 
     devices: Table(xcb_input_device_id_t, *XCB_Device_Info);
+
+    pending_event: *xcb_generic_event_t;
 }
 
 XCB_Window :: struct {
@@ -277,9 +279,11 @@ xcb_set_fixed_scaling :: (display: *Display, factor: float) {
 xcb_wait_for_events :: (display: *Display) {
     xcb_check_usage(display, null);
 
+    xd : *XCB_Display = display;
+
     while true {
         pfd: [3]pollfd;
-        pfd[0].fd = display.xcb.file_descriptor;
+        pfd[0].fd = xd.file_descriptor;
         pfd[0].events = POLLIN;
         pfd[1].fd = timers_epfd;
         pfd[1].events = POLLIN;
@@ -313,17 +317,32 @@ xcb_wait_for_events :: (display: *Display) {
         }
 
         if pfd[0].revents & POLLIN {
+            assert(xd.pending_event == null);
+            xd.pending_event = xcb.poll_for_event(xd.handle);
+            if !xd.pending_event {
+                xcb.flush(xd.handle);
+                continue;
+            }
             break;
         }
     }
 }
 
 xcb_update_window_events :: (display: *Display) {
+    xcb_check_usage(display, null);
+
     xd: *XCB_Display = display;
 
-    while event_loop := true {
-        event := xcb.poll_for_event(xd.handle);
-        if !event break;
+    event: *xcb_generic_event_t;
+    if xd.pending_event {
+        event = xd.pending_event;
+        xd.pending_event = null;
+    } else {
+        event = xcb.poll_for_event(xd.handle);
+    }
+
+    while event != null {
+        defer event = xcb.poll_for_event(xd.handle);
 
         if event.response_type == xd.xkb_event_base {
             geev := cast(*xcb_generic_event_t) event;
