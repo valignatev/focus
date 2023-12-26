@@ -704,13 +704,11 @@ handle_xinput_event :: (xd: *XCB_Display, geev: *xcb_ge_generic_event_t) {
 
             if has_vert_scroll {
                 vs := fp3232_to_float(vert_val) / fp3232_to_float(di.scroll_vert.increment);
-                if vs > -1.0 && vs < 0.0 vs = -1.0;
-                if vs >= 0.0 && vs < 1.0 vs = 1.0;
 
                 event: Input.Event;
                 event.type = .MOUSE_WHEEL;
                 event.typical_wheel_delta = WHEEL_DELTA;
-                event.wheel_delta = cast(s32)(cast(float64) -WHEEL_DELTA * vs);
+                event.wheel_delta = -1 * cast(s32)(cast(float64) WHEEL_DELTA * vs);
                 array_add(*xd.base.events_this_frame, event);
                 xd.base.mouse_delta_z += event.wheel_delta;
             }
