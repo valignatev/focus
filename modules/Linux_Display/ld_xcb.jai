@@ -682,18 +682,27 @@ handle_xinput_event :: (xd: *XCB_Display, geev: *xcb_ge_generic_event_t) {
 
             has_vert_scroll, vert_val := get_valuator_value(di.scroll_vert.number, axis, valuator_masks);
             has_horz_scroll, horz_val := get_valuator_value(di.scroll_horz.number, axis, valuator_masks);
-            // if has_vert_scroll || has_horz_scroll
-            //     log("SCROLL EVENT: vert=% horz=%", vert_val, horz_val);
 
             if has_vert_scroll {
+                vs := fp3232_to_float(vert_val) / fp3232_to_float(di.scroll_vert.increment);
+                if vs > -1.0 && vs < 0.0 vs = -1.0;
+                if vs >= 0.0 && vs < 1.0 vs = 1.0;
+
                 event: Input.Event;
                 event.type = .MOUSE_WHEEL;
                 event.typical_wheel_delta = WHEEL_DELTA;
-                event.wheel_delta = -WHEEL_DELTA * (vert_val.integral / di.scroll_vert.increment.integral);
+                event.wheel_delta = cast(s32)(cast(float64) -WHEEL_DELTA * vs);
                 array_add(*xd.base.events_this_frame, event);
                 xd.base.mouse_delta_z += event.wheel_delta;
             }
     }
+}
+
+fp3232_to_float :: inline (fp: xcb_input_fp3232_t) -> float64 {
+    vs := cast(float64) fp.integral;
+    if fp.integral < 0 vs -= cast(float64) fp.frac / cast(float64) U32_MAX;
+    else vs += cast(float64) fp.frac / cast(float64) U32_MAX;
+    return vs;
 }
 
 get_valuator_value :: inline (number: u16, values: []xcb_input_fp3232_t, masks: []u32) -> bool, xcb_input_fp3232_t {
