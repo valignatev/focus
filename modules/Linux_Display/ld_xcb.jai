@@ -41,6 +41,9 @@ XCB_Display :: struct {
 
         UTF8_STRING: xcb_atom_t;
     }
+    atom_names: Table(xcb_atom_t, string);
+
+    devices: Table(xcb_input_device_id_t, *XCB_Device_Info);
 }
 
 XCB_Window :: struct {
@@ -116,6 +119,7 @@ xcb_init_display :: (display: *Display) -> bool {
     core := xkb_x11_get_core_keyboard_device_id(connection);
     xcb_xkb.select_events_aux(connection, xx core, xx affect, 0, 0, xx map_parts, xx map_parts, *details);
 
+    atom_names: Table(xcb_atom_t, string);
     {
         push_allocator(temp);
 
@@ -146,6 +150,8 @@ xcb_init_display :: (display: *Display) -> bool {
             }
             i.atom.* = reply.atom;
             libc_free(reply);
+
+            table_add(*atom_names, i.atom.*, i.name);
         }
     }
 
@@ -156,6 +162,7 @@ xcb_init_display :: (display: *Display) -> bool {
     xd.xi_ext_opcode   = xi_ext.major_opcode;
     xd.xkb_event_base  = xkb_event_base;
     xd.file_descriptor = xcb.get_file_descriptor(connection);
+    xd.atom_names      = atom_names;
 
     bd: *Base_Display = display;
     bd.type = XCB_Display;
@@ -237,10 +244,16 @@ xcb_create_window :: (display: *Display, window: *Window, width: int, height: in
         using #as hdr: xcb_input_event_mask_t;
         data: [8]xcb_input_xi_event_mask_t;
     }
+
     mask.deviceid = xx xcb_input_device_t.ALL_MASTER;
     mask.mask_len = 1;
     mask.data[0]  = .KEY_PRESS | .KEY_RELEASE | .BUTTON_PRESS | .BUTTON_RELEASE;
     xcb_input.xi_select_events(xd.handle, wid, 1, *mask);
+
+    mask.deviceid = xx xcb_input_device_t.ALL_MASTER;
+    mask.mask_len = 1;
+    mask.data[0]  = .RAW_MOTION;
+    xcb_input.xi_select_events(xd.handle, xd.screen.root, 1, *mask);
 
     xcb.map_window(xd.handle, wid);
     xcb.flush(xd.handle);
@@ -481,6 +494,9 @@ xcb_get_dpi_scaling_factor :: (window: *Window) -> float {
 }
 
 #scope_file
+#import "Basic";
+#import "Math";
+
 #load "xcb_fp.jai";
 #load "xcb_xinput_fp.jai";
 #load "xcb_xkb_fp.jai";
@@ -650,7 +666,166 @@ handle_xinput_event :: (xd: *XCB_Display, geev: *xcb_ge_generic_event_t) {
                 else Input.Key_Current_State.END;
 
             array_add(*xd.base.events_this_frame, event);
+
+        case XCB_INPUT_RAW_MOTION;
+            rmev := cast(*xcb_input_raw_motion_event_t) geev;
+            di := get_device_info(xd, rmev.deviceid);
+            if !di return;
+
+            axis: []xcb_input_fp3232_t;
+            axis.data = xcb_input.raw_button_press_axisvalues_raw(rmev);
+            axis.count = xcb_input.raw_button_press_axisvalues_raw_length(rmev);
+
+            valuator_masks: []u32;
+            valuator_masks.data = xcb_input.raw_button_press_valuator_mask(rmev);
+            valuator_masks.count = xcb_input.raw_button_press_valuator_mask_length(rmev);
+
+            has_vert_scroll, vert_val := get_valuator_value(di.scroll_vert.number, axis, valuator_masks);
+            has_horz_scroll, horz_val := get_valuator_value(di.scroll_horz.number, axis, valuator_masks);
+            // if has_vert_scroll || has_horz_scroll
+            //     log("SCROLL EVENT: vert=% horz=%", vert_val, horz_val);
+
+            if has_vert_scroll {
+                event: Input.Event;
+                event.type = .MOUSE_WHEEL;
+                event.typical_wheel_delta = WHEEL_DELTA;
+                event.wheel_delta = -WHEEL_DELTA * vert_val.integral;
+                array_add(*xd.base.events_this_frame, event);
+                xd.base.mouse_delta_z += event.wheel_delta;
+            }
     }
+}
+
+get_valuator_value :: inline (number: u16, values: []xcb_input_fp3232_t, masks: []u32) -> bool, xcb_input_fp3232_t {
+    id := cast(u16)1 << number;
+    if number == INVALID_VALUATOR || !(masks[(id & 0xffe0) >> 6] & (id & 0x001f)) return false, .{};
+
+    pval := values.data;
+    id = 1;
+    for 0..cast(s32) number - 1 {
+        if masks[(id & 0xffe0) >> 6] & (id & 0x001f) {
+            pval += 1;
+            assert(pval < values.data + values.count);
+        }
+        id = id << it;
+    }
+    return true, pval.*;
+}
+
+INVALID_VALUATOR :: U16_MAX;
+
+XCB_Valuator_Class :: struct {
+    label: string;
+    number: u16;
+    min: xcb_input_fp3232_t;
+    max: xcb_input_fp3232_t;
+    val: xcb_input_fp3232_t;
+    resolution: u32;
+}
+
+XCB_Scroll_Axis_Info :: struct {
+    number: u16 = INVALID_VALUATOR;
+    valuator: *XCB_Valuator_Class;
+    increment: xcb_input_fp3232_t;
+}
+
+XCB_Device_Info :: struct {
+    name: string;
+    valuators: [..]XCB_Valuator_Class;
+    scroll_vert: XCB_Scroll_Axis_Info;
+    scroll_horz: XCB_Scroll_Axis_Info;
+}
+
+get_device_info :: (xd: *XCB_Display, device_id: xcb_input_device_id_t) -> *XCB_Device_Info {
+    ret, found := table_find(*xd.devices, device_id);
+    if found return ret;
+
+    xcb_err: *xcb_generic_error_t;
+    cookie := xcb_input.xi_query_device(xd.handle, device_id);
+    reply := xcb_input.xi_query_device_reply(xd.handle, cookie, *xcb_err);
+    defer libc_free(reply);
+
+    device_info: XCB_Device_Info;
+
+    infos_len := xcb_input.xi_query_device_infos_length(reply);
+    infos_it  := xcb_input.xi_query_device_infos_iterator(reply);
+    if infos_len != 1 {
+        log_error("XCB device_id % has % attached device_info entries, refusing to continue", device_id, infos_len);
+        return null;
+    }
+
+    info := infos_it.data;
+    sz_name := xcb_input.xi_device_info_name(info);
+    name_len := xcb_input.xi_device_info_name_length(info);
+    device_name := to_string(sz_name, name_len);
+
+    valuators: [..]XCB_Valuator_Class;
+    scroll_vert: XCB_Scroll_Axis_Info;
+    scroll_horz: XCB_Scroll_Axis_Info;
+
+    classes: [..]string;
+    classes_count := xcb_input.xi_device_info_classes_length(info);
+    classes_it := xcb_input.xi_device_info_classes_iterator(info);
+    for 1..classes_count {
+        defer xcb_input.device_class_next(*classes_it);
+
+        class := classes_it.data;
+        class_type := cast(xcb_input_device_class_type_t) class.type;
+        if class_type == {
+            case .VALUATOR; {
+                val_class := cast(*xcb_input_valuator_class_t) class;
+                array_add(*valuators, .{
+                    label  = atom_name(xd, val_class.label),
+                    number = val_class.number,
+                    min    = val_class.min,
+                    max    = val_class.max,
+                    val    = val_class.value,
+                    resolution = val_class.resolution,
+                });
+            }
+            case .SCROLL; {
+                scroll_class := cast(*xcb_input_scroll_class_t) class;
+                if scroll_class.scroll_type == xx xcb_input_scroll_type_t.VERTICAL {
+                    scroll_vert.number = scroll_class.number;
+                    scroll_vert.increment = scroll_class.increment;
+                } else {
+                    assert(scroll_class.scroll_type == xx xcb_input_scroll_type_t.HORIZONTAL);
+                    scroll_horz.number = scroll_class.number;
+                    scroll_horz.increment = scroll_class.increment;
+                }
+            }
+        }
+    }
+
+    if scroll_vert.number != INVALID_VALUATOR || scroll_horz.number != INVALID_VALUATOR {
+        scroll_vert.valuator = ifx scroll_vert.number != INVALID_VALUATOR && scroll_vert.number < valuators.count then *valuators[scroll_vert.number] else null;
+        scroll_horz.valuator = ifx scroll_horz.number != INVALID_VALUATOR && scroll_horz.number < valuators.count then *valuators[scroll_horz.number] else null;
+        if !scroll_vert.valuator && !scroll_horz.valuator {
+            log_error("get_device_info(): failed to match scroll wheels to valuators:\n  valuators=%\n  scroll_vert=%\n  scroll_horz=%",
+                valuators, scroll_vert, scroll_horz);
+            array_reset(*valuators);
+            return null;
+        }
+        device_info.name = copy_string(device_name);
+        device_info.valuators = valuators;
+        device_info.scroll_vert = scroll_vert;
+        device_info.scroll_horz = scroll_horz;
+    } else {
+        array_reset(*valuators);
+        return null;
+    }
+
+    fmt := FormatStruct.{
+        value = device_info,
+        use_long_form_if_more_than_this_many_members = -1,
+        use_newlines_if_long_form = true,
+    };
+    log("NEW DEVICE: %", fmt);
+    ret = New(XCB_Device_Info, initialized=false);
+    ret.* = device_info;
+    table_add(*xd.devices, device_id, ret);
+
+    return ret;
 }
 
 set_utf8_property :: (xw: *XCB_Window, property: xcb_atom_t, value: string) {
@@ -709,6 +884,25 @@ load_cursors :: (xd: *XCB_Display) -> bool {
     }
 
     return true;
+}
+
+atom_name :: (xd: *XCB_Display, atom: xcb_atom_t) -> string {
+    name, found := table_find(*xd.atom_names, atom);
+    if found return name;
+
+    xcb_err: *xcb_generic_error_t;
+    cookie := xcb.get_atom_name(xd.handle, atom);
+    reply  := xcb.get_atom_name_reply(xd.handle, cookie, *xcb_err);
+    defer libc_free(reply);
+
+    if !reply || xcb_err return "";
+
+    n: string;
+    n.data  = xcb.get_atom_name_name(reply);
+    n.count = xcb.get_atom_name_name_length(reply);
+    name = copy_string(n);
+    table_add(*xd.atom_names, atom, name);
+    return name;
 }
 
 #scope_module
