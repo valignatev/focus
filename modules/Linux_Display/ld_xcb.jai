@@ -689,7 +689,7 @@ handle_xinput_event :: (xd: *XCB_Display, geev: *xcb_ge_generic_event_t) {
                 event: Input.Event;
                 event.type = .MOUSE_WHEEL;
                 event.typical_wheel_delta = WHEEL_DELTA;
-                event.wheel_delta = -WHEEL_DELTA * vert_val.integral;
+                event.wheel_delta = -WHEEL_DELTA * (vert_val.integral / di.scroll_vert.increment.integral);
                 array_add(*xd.base.events_this_frame, event);
                 xd.base.mouse_delta_z += event.wheel_delta;
             }
