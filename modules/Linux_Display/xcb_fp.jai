@@ -1694,7 +1694,7 @@ xcb_change_window_attributes_request_t :: struct {
     pad0:         u8;
     length:       u16;
     window:       xcb_window_t;
-    value_mask:   u32;
+    value_mask:   xcb_cw_t;
 }
 
 xcb_map_state_t :: enum u32 {
@@ -1960,7 +1960,7 @@ xcb_get_atom_name_reply_t :: struct {
     pad1:          [22] u8;
 }
 
-xcb_prop_mode_t :: enum u32 {
+xcb_prop_mode_t :: enum u8 {
     REPLACE :: 0;
     PREPEND :: 1;
     APPEND  :: 2;
@@ -1972,7 +1972,7 @@ xcb_prop_mode_t :: enum u32 {
 
 xcb_change_property_request_t :: struct {
     major_opcode: u8;
-    mode:         u8;
+    mode:         xcb_prop_mode_t;
     length:       u16;
     window:       xcb_window_t;
     property:     xcb_atom_t;
@@ -4127,10 +4127,10 @@ XCB_Symbols :: struct #type_info_procedures_are_void_pointers #type_info_no_size
     change_window_attributes_value_list_unpack:       #type (_buffer: *void, value_mask: u32, _aux: *xcb_change_window_attributes_value_list_t) -> s32 #c_call;
     change_window_attributes_value_list_sizeof:       #type (_buffer: *void, value_mask: u32) -> s32 #c_call;
     change_window_attributes_sizeof:                  #type (_buffer: *void) -> s32 #c_call;
-    change_window_attributes_checked:                 #type (c: *xcb_connection_t, window: xcb_window_t, value_mask: u32, value_list: *void) -> xcb_void_cookie_t #c_call;
-    change_window_attributes:                         #type (c: *xcb_connection_t, window: xcb_window_t, value_mask: u32, value_list: *void) -> xcb_void_cookie_t #c_call;
-    change_window_attributes_aux_checked:             #type (c: *xcb_connection_t, window: xcb_window_t, value_mask: u32, value_list: *xcb_change_window_attributes_value_list_t) -> xcb_void_cookie_t #c_call;
-    change_window_attributes_aux:                     #type (c: *xcb_connection_t, window: xcb_window_t, value_mask: u32, value_list: *xcb_change_window_attributes_value_list_t) -> xcb_void_cookie_t #c_call;
+    change_window_attributes_checked:                 #type (c: *xcb_connection_t, window: xcb_window_t, value_mask: xcb_cw_t, value_list: *void) -> xcb_void_cookie_t #c_call;
+    change_window_attributes:                         #type (c: *xcb_connection_t, window: xcb_window_t, value_mask: xcb_cw_t, value_list: *void) -> xcb_void_cookie_t #c_call;
+    change_window_attributes_aux_checked:             #type (c: *xcb_connection_t, window: xcb_window_t, value_mask: xcb_cw_t, value_list: *xcb_change_window_attributes_value_list_t) -> xcb_void_cookie_t #c_call;
+    change_window_attributes_aux:                     #type (c: *xcb_connection_t, window: xcb_window_t, value_mask: xcb_cw_t, value_list: *xcb_change_window_attributes_value_list_t) -> xcb_void_cookie_t #c_call;
     change_window_attributes_value_list:              #type (R: *xcb_change_window_attributes_request_t) -> *void #c_call;
     get_window_attributes:                            #type (c: *xcb_connection_t, window: xcb_window_t) -> xcb_get_window_attributes_cookie_t #c_call;
     get_window_attributes_unchecked:                  #type (c: *xcb_connection_t, window: xcb_window_t) -> xcb_get_window_attributes_cookie_t #c_call;
@@ -4184,8 +4184,8 @@ XCB_Symbols :: struct #type_info_procedures_are_void_pointers #type_info_no_size
     get_atom_name_name_end:                           #type (R: *xcb_get_atom_name_reply_t) -> xcb_generic_iterator_t #c_call;
     get_atom_name_reply:                              #type (c: *xcb_connection_t, cookie: xcb_get_atom_name_cookie_t, e: **xcb_generic_error_t) -> *xcb_get_atom_name_reply_t #c_call;
     change_property_sizeof:                           #type (_buffer: *void) -> s32 #c_call;
-    change_property_checked:                          #type (c: *xcb_connection_t, mode: u8, window: xcb_window_t, property: xcb_atom_t, type: xcb_atom_t, format: u8, data_len: u32, data: *void) -> xcb_void_cookie_t #c_call;
-    change_property:                                  #type (c: *xcb_connection_t, mode: u8, window: xcb_window_t, property: xcb_atom_t, type: xcb_atom_t, format: u8, data_len: u32, data: *void) -> xcb_void_cookie_t #c_call;
+    change_property_checked:                          #type (c: *xcb_connection_t, mode: xcb_prop_mode_t, window: xcb_window_t, property: xcb_atom_t, type: xcb_atom_t, format: u8, data_len: u32, data: *void) -> xcb_void_cookie_t #c_call;
+    change_property:                                  #type (c: *xcb_connection_t, mode: xcb_prop_mode_t, window: xcb_window_t, property: xcb_atom_t, type: xcb_atom_t, format: u8, data_len: u32, data: *void) -> xcb_void_cookie_t #c_call;
     change_property_data:                             #type (R: *xcb_change_property_request_t) -> *void #c_call;
     change_property_data_length:                      #type (R: *xcb_change_property_request_t) -> s32 #c_call;
     change_property_data_end:                         #type (R: *xcb_change_property_request_t) -> xcb_generic_iterator_t #c_call;
