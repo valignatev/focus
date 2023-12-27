@@ -113,13 +113,13 @@ xcb_init_display :: (display: *Display) -> bool {
     map_parts := xcb_xkb_map_part_t.KEY_TYPES | .KEY_SYMS | .MODIFIER_MAP | .EXPLICIT_COMPONENTS | .KEY_ACTIONS | .VIRTUAL_MODS | .VIRTUAL_MOD_MAP;
     state_parts := xcb_xkb_state_part_t.MODIFIER_BASE | .MODIFIER_LATCH | .MODIFIER_LOCK | .GROUP_BASE | .GROUP_LATCH | .GROUP_LOCK;
     details := xcb_xkb_select_events_details_t.{
-        affectNewKeyboard = xx xcb_xkb_nkn_detail_t.KEYCODES,
-        newKeyboardDetails = xx xcb_xkb_nkn_detail_t.KEYCODES,
-        affectState = xx state_parts,
-        stateDetails = xx state_parts,
+        affectNewKeyboard = .KEYCODES,
+        newKeyboardDetails = .KEYCODES,
+        affectState = state_parts,
+        stateDetails = state_parts,
     };
     core := xkb_x11_get_core_keyboard_device_id(connection);
-    xcb_xkb.select_events_aux(connection, xx core, xx affect, 0, 0, xx map_parts, xx map_parts, *details);
+    xcb_xkb.select_events_aux(connection, xx core, affect, 0, 0, map_parts, map_parts, *details);
 
     atom_names: Table(xcb_atom_t, string);
     {
@@ -212,7 +212,7 @@ xcb_create_window :: (display: *Display, window: *Window, width: int, height: in
 
     xcb.change_property(
         xd.handle,
-        xx xcb_prop_mode_t.REPLACE,
+        .REPLACE,
         wid,
         xd.global_atoms.WM_PROTOCOLS,
         xx xcb_atom_enum_t.ATOM,
@@ -419,14 +419,14 @@ xcb_set_icon_from_raw_data :: (window: *Window, data: *u8, width: u32, height: u
     size_data := u32.[width, height];
     xcb.change_property(
         xd.handle,
-        xx xcb_prop_mode_t.REPLACE,
+        .REPLACE,
         xw.handle,
         xd.global_atoms._NET_WM_ICON,
         xx xcb_atom_enum_t.CARDINAL,
         32, xx size_data.count, size_data.data);
     xcb.change_property(
         xd.handle,
-        xx xcb_prop_mode_t.APPEND,
+        .APPEND,
         xw.handle,
         xd.global_atoms._NET_WM_ICON,
         xx xcb_atom_enum_t.CARDINAL,
@@ -498,7 +498,7 @@ xcb_set_cursor_from_theme :: (window: *Window, name: string) {
     if found {
         attrs: xcb_change_window_attributes_value_list_t;
         attrs.cursor = cursor;
-        xcb.change_window_attributes_aux(xd.handle, xw.handle, xx xcb_cw_t.CURSOR, *attrs);
+        xcb.change_window_attributes_aux(xd.handle, xw.handle, .CURSOR, *attrs);
     }
 }
 
@@ -859,10 +859,10 @@ set_utf8_property :: (xw: *XCB_Window, property: xcb_atom_t, value: string) {
     sz_val := tprint("%\0", value);
     xcb.change_property(
         xd.handle,
-        xx xcb_prop_mode_t.REPLACE,
+        .REPLACE,
         xw.handle,
-        xx property,
-        xx xd.global_atoms.UTF8_STRING,
+        property,
+        xd.global_atoms.UTF8_STRING,
         8, xx sz_val.count, sz_val.data);
 }
 
